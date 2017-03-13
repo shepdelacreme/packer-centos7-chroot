@@ -1,0 +1,94 @@
+{
+  "description": "AMI Builder for CentOS 7",
+  "variables": {
+    "aws_access_key": "",
+    "aws_secret_key": "",
+    "region": "us-east-1",
+    "project_name": "c7build",
+    "build_stage": "base",
+    "os_name": "centos",
+    "os_version": "7",
+    "root_device_size": "8",
+    "fs_type": "xfs",
+    "repo_baseurl": "mirror.centos.org",
+    "rpm_release_file": "centos-release-7-3.1611.el7.centos.x86_64.rpm"
+  },
+
+  "provisioners": [
+    {
+      "type": "file",
+      "source": "files/common/10-growpart.cfg",
+      "destination": "/tmp/10-growpart.cfg"
+    },
+    {
+      "type": "file",
+      "source": "files/{{user `os_name`}}{{user `os_version`}}/cloud.cfg",
+      "destination": "/tmp/cloud.cfg"
+    },
+    {
+      "type": "shell",
+      "environment_vars": [
+        "FS_TYPE={{user `fs_type`}}"
+      ],
+      "scripts": [
+        "scripts/{{user `os_name`}}{{user `os_version`}}/10-packages.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/20-config.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/30-services.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/40-network.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/50-cloud-init.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/60-grub.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/70-users.sh",
+        "scripts/{{user `os_name`}}{{user `os_version`}}/80-cleanup.sh"
+      ]
+    }
+  ],
+
+  "builders": [
+    {
+      "type": "amazon-chroot",
+      "access_key": "{{user `aws_access_key`}}",
+      "secret_key": "{{user `aws_secret_key`}}",
+      "ami_name": "{{user `os_name`}}-{{user `os_version`}}-{{user `build_stage`}}-{{isotime \"2006-01-02-030405\" | clean_ami_name}}",
+      "ami_description": "{{user `os_name`}} {{user `os_version`}} {{user `build_stage`}} image built on {{isotime \"2006-01-02\"}}",
+      "from_scratch": true,
+      "ami_virtualization_type": "hvm",
+      "pre_mount_commands": [
+        "echo 'Make sure gdisk is installed on builder'",
+        "yum -y install gdisk",
+        "echo 'Partition device'",
+        "sgdisk -og {{.Device}}",
+        "sgdisk -n 1:4096:0 -c 1:\"Linux\" -t 1:8300 {{.Device}}",
+        "sgdisk -n 128:2048:4095 -c 128:\"BIOS Boot Partition\" -t 128:ef02 {{.Device}}",
+        "echo 'Create desired filesystem on device'",
+        "mkfs.{{user `fs_type`}} -L root {{.Device}}1",
+        "sync"
+      ],
+      "post_mount_commands": [
+        "echo 'RPM initial setup'",
+        "rpm --root={{.MountPath}} --initdb",
+        "echo 'Install base OS release RPM to lay down the basics in chroot'",
+        "rpm --root={{.MountPath}} -ivh http://{{user `repo_baseurl`}}/{{user `os_name`}}/{{user `os_version`}}/os/x86_64/Packages/{{user `rpm_release_file`}}",
+        "echo 'Make sure yum and deltarpm are installed'",
+        "yum --installroot={{.MountPath}} -y install yum deltarpm",
+        "echo 'Write out variable for use by provisioning scripts'",
+        "echo 'DEVICE={{.Device}}' > {{.MountPath}}/tmp/env_vars"
+      ],
+      "root_volume_size": "{{user `root_device_size`}}",
+      "root_device_name": "/dev/xvda",
+      "ami_block_device_mappings": [
+        {
+          "device_name": "/dev/xvda",
+          "delete_on_termination": true,
+          "volume_type": "gp2"
+        }
+      ],
+      "copy_files": ["/etc/resolv.conf"],
+      "tags": {
+        "buildStage": "{{user `build_stage`}}",
+        "buildDate": "{{isotime \"2006-01-02\"}}",
+        "os": "{{user `os_name`}}",
+        "version": "{{user `os_version`}}"
+      }
+    }
+  ]
+}
